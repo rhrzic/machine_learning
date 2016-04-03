@@ -2,19 +2,28 @@
 title: "Machine Learning Writeup"
 author: "rokhrzic"
 date: "2 April 2016"
-output: pdf_document
+output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
 ```
 
-## R Markdown
+## Executive Summary
 
-```{r setup echo=FALSE}
+This report explores a Human Activity Recognition dataset by Velloso et al. It contains data from 6 participants and aimed to assess the quality of performed barbell lifts. The lifts could be performed perfectly or imperfectly in the following ways: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E); these were noted in the variable classe.
+The rest of the dataset comes from a number of accelerometers on the belt, forearm, arm, and dumbell.
+We created a stacked model using components of a Random Forrest, a Gradient Boosting Machine and a Linear Discriminant Analysis. The combined model yielded an In-Sample model accuracy of 0.9930331.
+Lastly, we used the model to create predictions for a set of 20 measurements in a validation dataset.
 
-download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "training.csv")
-download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "testing.csv")
+## Basic setup
+
+We begin the task by downloading the dataset and reading it into our environment. We also load the caret package.
+
+```{r basics}
+
+#download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", "training.csv")
+#download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", "testing.csv")
 
 dat <- read.csv("training.csv")
 validation <- read.csv("testing.csv")
@@ -22,69 +31,98 @@ validation <- read.csv("testing.csv")
 library(caret)
 ```
 
-## Exploratory analysis
+## Exploratory analysis and cleaning data
 
-```{r exploratory}
+To make certain the training data is properly formatted and ready to be used for modelling, we undertake a number of exploratory analyses. We look at the structure of our dataset, we calculate the number of missing values and plot the outcome, classe, we are attempting to predict.
 
-str(training)
+```{r exploratory1}
 
-sum(is.na(training))
+str(dat)
+sum(is.na(dat))
 
 qplot(classe, data=dat)
 
-dat <- dat[,-c(1:7)]
-validation <- validation[,-c(1:7)]
-
 ```
+
+We have a dataset of 19622 observations of 160 variables. But we also notice a large number of missing values, more or less completely contained within a limited set of variables.
+
+On the other hand, the plot of classe shows that class A is the most numerous, with the other classes more or less equally represented.
+
+To take care of the above described issues with our training dataset, we choose to omit the variables that include missing values. We also exclude the first 7 variables, since they only include data about the participants themselves and not necessarily about the movements they made.
+
+```{r exploratory2}
+
+dat <- dat[, apply(dat, 2, function(x) !any(is.na(x)|x==""))]
+dat <- dat[,-c(1:7)]
+
+sum(is.na(dat))
+str(dat)
+```
+
+We see that these manipulations completely eliminate our missing values and leave us with a training set of `r dim(dat)`.
 
 ## Modelling
 
-```{r exploratory}
+We are going to create two models: a Random Forrest and a Gradient Boosting Machine. To be able to calculate an accurate Out-of-Sample accuracy (or inversely error) rate, we will split the training dataset in two segments, the first to fit the models and the second to evaluate them.
+Within each of the models, we also use cross-validation of three groups.
 
-inTrain <- createDataPartition(y=dat, p=0.7, list=FALSE)
+```{r modelling, message=FALSE}
 
-training <- dat[inTrain]
-testing <- dat[-inTrain]
+inTrain <- createDataPartition(dat$classe, p=0.7, list=FALSE)
 
-RFmdl <- train(classe~., data=training, method="rf", trainControl(method="cv", number=5))
-GBMmdl <- train(classe~., data=training, method="gbm", trainControl(method="cv", number=5))
-LDAmdl <- train(classe~., data=training, method="lda", trainControl(method="cv", number=5))
+training <- dat[inTrain,]
+testing <- dat[-inTrain,]
+
+crossval <- trainControl(method="cv", number=3, allowParallel=T, verbose=F)
+
+RFmdl <- train(classe~., data=training, method="rf", trControl=crossval)
+GBMmdl <- train(classe~., data=training, method="gbm", trControl=crossval)
+LDAmdl <- train(classe~., data=training, method="lda", trControl=crossval)
 
 RFprd <- predict(RFmdl, testing)
 GBMprd <- predict(GBMmdl, testing)
 LDAprd <- predict(LDAmdl, testing)
 
-combined.data <- data.frame(RFprd, GBMprd, LDAprd, testing$classe)
+combined.data <- data.frame(rf=RFprd, gbm=GBMprd, lda=LDAprd, classe=testing$classe)
 
-combined.mdl <- train(classe~., data=combined.data, method="rf", trainControl(method="cv", number=5))
+combined.mdl <- train(classe~., data=combined.data, method="rf", trControl=crossval)
 
-combined.prd <- predict(combined.mdl, testing)
+combined.prd <- predict(combined.mdl, combined.data)
 
 ```
 
 ## In-Sample Evaluation
 
-```{r evaluation}
+To get an idea of how our models perform, we can use confusion matrices to calculate In-Sample accuracy and other rates, as seen below.
 
-confusionMatrix(RFprd, testing$classe)$overall['Accuracy']
-confusionMatrix(RFprd, testing$classe)$overall['Accuracy']
-confusionMatrix(RFprd, testing$classe)$overall['Accuracy']
-confusionMatrix(RFprd, testing$classe)$overall['Accuracy']
+```{r evaluation1}
+confusionMatrix(RFprd, training$classe)
+confusionMatrix(GBMprd, training$classe)
+```
+
+## Out-of-Sample Evaluation
+
+To more realistically evaluate the accuracy of models we created, we again calculate confusion matrices, but this time we attempt to predict from and compare with the testing dataset, which was not used to fit the models. Therefore, this can be considered as Out-of-Sample evaluation.
+
+```{r evaluation2}
+
+confusionMatrix(RFprd, testing$classe)
+confusionMatrix(GBMprd, testing$classe)
 
 ```
 
-## Out-Sample Evaluation
+We see that the Random Forrest model performs better and yields an Out-of-Sample accuracy of `r confusionMatrix(RFprd, testing$classe)$overall['Accuracy']`.
+
+## Prediction (and Validation)
+
+The last step is using our models to predict for the validation set. The output below shows almost perfect agreement between the created models, mirroring the accuracy values above.
 
 ```{r predict}
 
 RFval <- predict(RFmdl, validation)
 GBMval <- predict(GBMmdl, validation)
-LDAval <- predict(LDAmdl, validation)
 
-combined.val.dat <- data.frame(RFval, GBMval, LDAval)
-combined.val.pred <- predict(combined.mdl, combined.val.dat)
-
-final.pred <- data.frame(RFval, GBMval, LDAval, combined.val.pred)
-
+final.prd <- data.frame(RFval, GBMval)
+final.prd
 ```
 
